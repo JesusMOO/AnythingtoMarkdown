@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sptool.commands import build_normal_command
+from sptool.commands import build_normal_command, build_ultra_command
 
 
 def test_marker_normal_command_uses_output_dir():
@@ -33,3 +33,13 @@ def test_markitdown_normal_command_uses_output_file():
         "-o",
         r"C:\work\a.md",
     ]
+
+
+def test_marker_ultra_command_preserves_native_args():
+    command = build_ultra_command("marker", Path("a.pdf"), ["--output_dir", "out"])
+    assert command == ["marker_single", "a.pdf", "--output_dir", "out"]
+
+
+def test_markitdown_ultra_command_preserves_native_args():
+    command = build_ultra_command("markitdown", Path("a.docx"), ["-o", "a.md"])
+    assert command == ["markitdown", "a.docx", "-o", "a.md"]

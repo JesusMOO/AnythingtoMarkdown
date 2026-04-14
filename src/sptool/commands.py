@@ -21,3 +21,11 @@ def build_normal_command(backend: str, source: Path, output: Path, extra_args: l
             *extra_args,
         ]
     raise ValueError(f"Unknown backend: {backend}")
+
+
+def build_ultra_command(backend: str, source: Path, extra_args: list[str]) -> list[str]:
+    if backend == "marker":
+        return ["marker_single", str(source), *extra_args]
+    if backend == "markitdown":
+        return ["markitdown", str(source), *extra_args]
+    raise ValueError(f"Unknown backend: {backend}")
