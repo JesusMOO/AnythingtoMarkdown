@@ -6,7 +6,7 @@ from sptool.commands import build_normal_command, build_ultra_command
 from sptool.executor import run_command
 from sptool.helptext import render_help
 from sptool.modes import get_mode
-from sptool.paths import directory_output_path, single_file_output_path
+from sptool.paths import directory_output_path, should_skip_output, single_file_output_path
 from sptool.routing import detect_backend
 from sptool.scanner import iter_files
 
@@ -44,6 +44,9 @@ def main(argv=None) -> int:
 
     for source, output in jobs:
         backend = detect_backend(source)
+        if mode == "normal" and should_skip_output(output):
+            print(f"[skip] {output} already exists")
+            continue
         command = (
             build_ultra_command(backend, source, native_args)
             if mode == "ultra"
