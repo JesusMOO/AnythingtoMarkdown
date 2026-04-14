@@ -29,3 +29,22 @@ def test_run_command_returns_success_for_zero_exit(monkeypatch):
     monkeypatch.setattr("sptool.executor.subprocess.run", lambda *a, **k: Completed())
     result = run_command(["markitdown", "a.docx", "-o", "a.md"])
     assert result.returncode == 0
+
+
+def test_single_file_path_calls_backend(monkeypatch, tmp_path):
+    source = tmp_path / "a.pdf"
+    source.write_text("x", encoding="utf-8")
+    seen = {}
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command):
+        seen["command"] = command
+        return Result()
+
+    monkeypatch.setattr("sptool.cli.run_command", fake_run)
+    assert main([str(source)]) == 0
+    assert seen["command"][0] == "marker_single"
