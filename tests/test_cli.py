@@ -1,3 +1,7 @@
+import runpy
+
+import pytest
+
 from sptool import __version__
 from sptool.cli import main
 from sptool.executor import run_command
@@ -48,3 +52,12 @@ def test_single_file_path_calls_backend(monkeypatch, tmp_path):
     monkeypatch.setattr("sptool.cli.run_command", fake_run)
     assert main([str(source)]) == 0
     assert seen["command"][0] == "marker_single"
+
+
+def test_module_entrypoint_prints_banner_and_help(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        runpy.run_module("sptool.cli", run_name="__main__")
+    assert excinfo.value.code == 0
+    output = capsys.readouterr().out
+    assert "SPTOOL" in output
+    assert "usage: sptool" in output
