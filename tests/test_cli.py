@@ -50,6 +50,7 @@ def test_single_file_path_calls_backend(monkeypatch, tmp_path, capsys):
         seen["command"] = command
         return Result()
 
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
     monkeypatch.setattr("sptool.cli.run_command", fake_run)
     assert main([str(source)]) == 0
     assert seen["command"][0] == "marker_single"
@@ -65,9 +66,64 @@ def test_single_file_failure_prints_error(monkeypatch, tmp_path, capsys):
         stdout = ""
         stderr = "backend failed"
 
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
     monkeypatch.setattr("sptool.cli.run_command", lambda command: Result())
     assert main([str(source)]) == 5
     assert ".error" in capsys.readouterr().out
+
+
+def test_pdf_path_initializes_marker_before_running_backend(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "a.pdf"
+    source.write_text("x", encoding="utf-8")
+    events = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_init():
+        events.append("init")
+
+    def fake_run(command):
+        events.append(command[0])
+        return Result()
+
+    monkeypatch.setattr("sptool.cli.ensure_marker_ready", fake_init, raising=False)
+    monkeypatch.setattr("sptool.cli.run_command", fake_run)
+
+    assert main([str(source)]) == 0
+
+    output = capsys.readouterr().out
+    assert ".info initializing marker models..." in output
+    assert events == ["init", "marker_single"]
+
+
+def test_pdf_initialization_failure_exits_without_running_backend(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "a.pdf"
+    source.write_text("x", encoding="utf-8")
+    seen = {"run": False}
+
+    def fake_init():
+        raise RuntimeError("network blocked")
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command):
+        seen["run"] = True
+        return Result()
+
+    monkeypatch.setattr("sptool.cli.ensure_marker_ready", fake_init, raising=False)
+    monkeypatch.setattr("sptool.cli.run_command", fake_run)
+
+    assert main([str(source)]) == 6
+
+    output = capsys.readouterr().out
+    assert ".error marker initialization failed: network blocked" in output
+    assert seen["run"] is False
 
 
 def test_module_entrypoint_prints_banner_and_version(capsys, monkeypatch):

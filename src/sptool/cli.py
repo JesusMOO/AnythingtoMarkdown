@@ -7,6 +7,7 @@ from sptool.banner import render_banner
 from sptool.commands import build_normal_command, build_ultra_command
 from sptool.executor import run_command
 from sptool.helptext import render_help
+from sptool.marker_init import ensure_marker_ready, marker_initialization_required
 from sptool.modes import get_mode
 from sptool.paths import directory_output_path, should_skip_output, single_file_output_path
 from sptool.routing import detect_backend
@@ -56,6 +57,13 @@ def _handle_args(args: list[str]) -> int:
         if mode == "normal" and should_skip_output(output):
             print(f".skip {output} already exists")
             continue
+        if backend == "marker" and marker_initialization_required():
+            print(".info initializing marker models...")
+            try:
+                ensure_marker_ready()
+            except Exception as exc:
+                print(f".error marker initialization failed: {exc}")
+                return 6
         command = (
             build_ultra_command(backend, source, native_args)
             if mode == "ultra"
