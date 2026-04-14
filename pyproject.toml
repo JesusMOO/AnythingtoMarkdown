@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sptool"
+version = "0.1.0"
+description = "SPTool markdown conversion CLI for marker and markitdown"
+requires-python = ">=3.10"
+dependencies = [
+  "marker-pdf[full]",
+  "markitdown[all]",
+]
+
+[project.scripts]
+sptool = "sptool.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
