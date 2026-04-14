@@ -12,7 +12,8 @@ def test_version_string_exists():
     assert __version__
 
 
-def test_no_args_returns_success():
+def test_no_args_returns_success(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda prompt: "exit")
     assert main([]) == 0
 
 
@@ -35,7 +36,7 @@ def test_run_command_returns_success_for_zero_exit(monkeypatch):
     assert result.returncode == 0
 
 
-def test_single_file_path_calls_backend(monkeypatch, tmp_path):
+def test_single_file_path_calls_backend(monkeypatch, tmp_path, capsys):
     source = tmp_path / "a.pdf"
     source.write_text("x", encoding="utf-8")
     seen = {}
@@ -52,12 +53,29 @@ def test_single_file_path_calls_backend(monkeypatch, tmp_path):
     monkeypatch.setattr("sptool.cli.run_command", fake_run)
     assert main([str(source)]) == 0
     assert seen["command"][0] == "marker_single"
+    assert ".success" in capsys.readouterr().out
 
 
-def test_module_entrypoint_prints_banner_and_help(capsys):
+def test_single_file_failure_prints_error(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "a.pdf"
+    source.write_text("x", encoding="utf-8")
+
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "backend failed"
+
+    monkeypatch.setattr("sptool.cli.run_command", lambda command: Result())
+    assert main([str(source)]) == 5
+    assert ".error" in capsys.readouterr().out
+
+
+def test_module_entrypoint_prints_banner_and_version(capsys, monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda prompt: "exit")
+    monkeypatch.setattr("sys.argv", ["sptool"])
     with pytest.raises(SystemExit) as excinfo:
         runpy.run_module("sptool.cli", run_name="__main__")
     assert excinfo.value.code == 0
     output = capsys.readouterr().out
-    assert "SPTOOL" in output
-    assert "usage: sptool" in output
+    assert "██████" in output
+    assert "sptool v0.1.0" in output
