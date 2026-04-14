@@ -1,5 +1,25 @@
 # sptool
 
+## Install
+
+```text
+pip install -e .
+```
+
+This installs `sptool` and its default runtime dependencies:
+
+- `marker-pdf[full]`
+- `markitdown[all]`
+
+## License
+
+This project is distributed under a GPL-compatible strategy because the default dependency set includes `marker-pdf[full]`, and `marker` is published under GPL-3.0.
+
+Relevant upstream licenses:
+
+- `markitdown`: MIT
+- `marker`: GPL-3.0
+
 ## Normal mode
 
 ```text
