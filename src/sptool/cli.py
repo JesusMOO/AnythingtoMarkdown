@@ -37,13 +37,19 @@ class ResourceSample:
 class Job:
     source: Path
     output: Path | None
+
+
+@dataclass(frozen=True)
+class PreparedJob:
+    source: Path
+    output: Path | None
     backend: str
     command: list[str]
 
 
 @dataclass(frozen=True)
 class ActiveJob:
-    job: Job
+    job: PreparedJob
     command: list[str]
     process: subprocess.Popen | object
 
@@ -86,35 +92,36 @@ def _collect_jobs(input_path: Path, explicit_output: Path | None, native_args: l
         for source in iter_files(input_path):
             jobs.append((source, directory_output_path(input_path, source)))
 
-    runnable_jobs: list[Job] = []
-    for source, output in jobs:
-        backend = detect_backend(source)
-        if mode == "normal" and output is not None and should_skip_output(output):
-            print(f".skip {output} already exists")
-            continue
-        if backend == "marker" and marker_initialization_required():
-            print(".info initializing marker models...")
-            try:
-                ensure_marker_ready()
-            except Exception as exc:
-                raise MarkerInitializationError(str(exc)) from exc
-        command = (
-            build_ultra_command(backend, source, native_args)
-            if mode == "ultra"
-            else build_normal_command(backend, source, output, [])
-        )
-        runnable_jobs.append(Job(source=source, output=output, backend=backend, command=command))
-    return runnable_jobs
+    return [Job(source=source, output=output) for source, output in jobs]
 
 
-def _success_marker(job: Job, mode: str) -> None:
+def _prepare_job(job: Job, native_args: list[str], mode: str) -> PreparedJob | None:
+    backend = detect_backend(job.source)
+    if mode == "normal" and job.output is not None and should_skip_output(job.output):
+        print(f".skip {job.output} already exists")
+        return None
+    if backend == "marker" and marker_initialization_required():
+        print(".info initializing marker models...")
+        try:
+            ensure_marker_ready()
+        except Exception as exc:
+            raise MarkerInitializationError(str(exc)) from exc
+    command = (
+        build_ultra_command(backend, job.source, native_args)
+        if mode == "ultra"
+        else build_normal_command(backend, job.source, job.output, [])
+    )
+    return PreparedJob(source=job.source, output=job.output, backend=backend, command=command)
+
+
+def _success_marker(job: PreparedJob, mode: str) -> None:
     if mode == "normal" and job.output is not None:
         print(f".success {job.source} -> {job.output}")
     else:
         print(f".success {job.source}")
 
 
-def _error_marker(job: Job, stderr: str) -> None:
+def _error_marker(job: PreparedJob, stderr: str) -> None:
     print(f".error {job.backend} failed for {job.source}")
     if stderr:
         print(stderr.strip())
@@ -144,11 +151,13 @@ def _finalize_process(process: subprocess.Popen | object, command: list[str]) ->
     )
 
 
-def _run_jobs(jobs: list[Job], mode: str) -> int:
+def _run_jobs(jobs: list[Job], native_args: list[str], mode: str) -> int:
     if not jobs:
         return 0
     if len(jobs) == 1:
-        job = jobs[0]
+        job = _prepare_job(jobs[0], native_args, mode)
+        if job is None:
+            return 0
         try:
             result = run_command(job.command)
         except FileNotFoundError as exc:
@@ -165,6 +174,8 @@ def _run_jobs(jobs: list[Job], mode: str) -> int:
     running: list[ActiveJob] = []
     failed = False
     missing_executable: str | None = None
+    deferred_exit_code: int | None = None
+    deferred_error_message: str | None = None
 
     while pending or running:
         completed: list[ActiveJob] = []
@@ -187,13 +198,26 @@ def _run_jobs(jobs: list[Job], mode: str) -> int:
         if missing_executable is not None:
             pending.clear()
 
+        if deferred_exit_code is not None:
+            pending.clear()
+
         if completed:
             if running:
                 time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
         if not running and pending and not failed:
-            job = pending.pop(0)
+            pending_job = pending.pop(0)
+            try:
+                job = _prepare_job(pending_job, native_args, mode)
+            except ValueError as exc:
+                print(f".error {exc}")
+                return 3
+            except MarkerInitializationError as exc:
+                print(f".error marker initialization failed: {exc}")
+                return 6
+            if job is None:
+                continue
             try:
                 started = start_command(job.command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             except FileNotFoundError as exc:
@@ -205,13 +229,25 @@ def _run_jobs(jobs: list[Job], mode: str) -> int:
                 return 4
             command, process = _coerce_started_process(started, job.command)
             running.append(ActiveJob(job=job, command=command, process=process))
-        elif running and pending and not failed and missing_executable is None:
+        elif running and pending and not failed and missing_executable is None and deferred_exit_code is None:
             concurrency_limit = max_concurrency(sample_resources())
             if len(running) >= concurrency_limit:
                 if running:
                     time.sleep(POLL_INTERVAL_SECONDS)
                 continue
-            job = pending.pop(0)
+            pending_job = pending.pop(0)
+            try:
+                job = _prepare_job(pending_job, native_args, mode)
+            except ValueError as exc:
+                deferred_exit_code = 3
+                deferred_error_message = f".error {exc}"
+                continue
+            except MarkerInitializationError as exc:
+                deferred_exit_code = 6
+                deferred_error_message = f".error marker initialization failed: {exc}"
+                continue
+            if job is None:
+                continue
             try:
                 started = start_command(job.command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             except FileNotFoundError as exc:
@@ -227,6 +263,9 @@ def _run_jobs(jobs: list[Job], mode: str) -> int:
     if missing_executable is not None:
         print(f".error executable not found: {missing_executable}")
         return 4
+    if deferred_error_message is not None:
+        print(deferred_error_message)
+        return deferred_exit_code or 1
     return 5 if failed else 0
 
 
@@ -264,7 +303,14 @@ def _handle_args(args: list[str]) -> int:
         print(f".error marker initialization failed: {exc}")
         return 6
 
-    return _run_jobs(jobs, mode)
+    try:
+        return _run_jobs(jobs, native_args, mode)
+    except ValueError as exc:
+        print(f".error {exc}")
+        return 3
+    except MarkerInitializationError as exc:
+        print(f".error marker initialization failed: {exc}")
+        return 6
 
 
 def _run_repl() -> int:

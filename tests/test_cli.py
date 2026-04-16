@@ -230,6 +230,82 @@ def test_collect_jobs_routing_error_returns_exit_code_3(monkeypatch, tmp_path, c
     assert ".error unsupported extension: .xyz" in capsys.readouterr().out
 
 
+def test_directory_processing_completes_earlier_file_before_late_routing_failure(monkeypatch, tmp_path, capsys):
+    root = tmp_path / "batch"
+    root.mkdir()
+    first = root / "a.pdf"
+    later = root / "b.xyz"
+    first.write_text("a", encoding="utf-8")
+    later.write_text("b", encoding="utf-8")
+
+    launched = []
+
+    def fake_detect_backend(path):
+        if path == first:
+            return "marker"
+        raise ValueError("unsupported extension: .xyz")
+
+    def fake_sample_resources():
+        return SimpleNamespace(cpu=0.05, memory=0.05)
+
+    def fake_start_command(command, **kwargs):
+        launched.append(command)
+        return FakeProcess(command, polls_to_finish=1)
+
+    monkeypatch.setattr("sptool.cli.iter_files", lambda path: [first, later])
+    monkeypatch.setattr("sptool.cli.detect_backend", fake_detect_backend)
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
+    monkeypatch.setattr("sptool.cli.sample_resources", fake_sample_resources, raising=False)
+    monkeypatch.setattr("sptool.cli.start_command", fake_start_command, raising=False)
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert main([str(root)]) == 3
+
+    output = capsys.readouterr().out
+    assert len(launched) == 1
+    assert ".success" in output
+    assert ".error unsupported extension: .xyz" in output
+
+
+def test_directory_processing_completes_earlier_file_before_late_marker_init_failure(monkeypatch, tmp_path, capsys):
+    root = tmp_path / "batch"
+    root.mkdir()
+    first = root / "a.docx"
+    later = root / "b.pdf"
+    first.write_text("a", encoding="utf-8")
+    later.write_text("b", encoding="utf-8")
+
+    launched = []
+
+    def fake_detect_backend(path):
+        return "markitdown" if path == first else "marker"
+
+    def fake_sample_resources():
+        return SimpleNamespace(cpu=0.05, memory=0.05)
+
+    def fake_start_command(command, **kwargs):
+        launched.append(command)
+        return FakeProcess(command, polls_to_finish=1)
+
+    def fake_init():
+        raise RuntimeError("network blocked")
+
+    monkeypatch.setattr("sptool.cli.iter_files", lambda path: [first, later])
+    monkeypatch.setattr("sptool.cli.detect_backend", fake_detect_backend)
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: True)
+    monkeypatch.setattr("sptool.cli.ensure_marker_ready", fake_init, raising=False)
+    monkeypatch.setattr("sptool.cli.sample_resources", fake_sample_resources, raising=False)
+    monkeypatch.setattr("sptool.cli.start_command", fake_start_command, raising=False)
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert main([str(root)]) == 6
+
+    output = capsys.readouterr().out
+    assert len(launched) == 1
+    assert ".success" in output
+    assert ".error marker initialization failed: network blocked" in output
+
+
 class FakeProcess:
     def __init__(self, command, returncode=0, polls_to_finish=0):
         self.command = command
