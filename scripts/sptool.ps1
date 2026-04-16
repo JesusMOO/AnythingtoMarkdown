@@ -3,8 +3,6 @@ param(
     [string[]] $ArgsList
 )
 
-$PythonExe = Join-Path $PSScriptRoot "..\.venv\Scripts\python.exe"
-
 if ($ArgsList.Count -ge 2 -and $ArgsList[0] -eq "ultra" -and $ArgsList[1] -eq "start") {
     $env:TOOL_MODE = "ultra"
     Write-Output "ultra mode enabled"
@@ -17,5 +15,5 @@ if ($ArgsList.Count -ge 2 -and $ArgsList[0] -eq "ultra" -and $ArgsList[1] -eq "e
     exit 0
 }
 
-& $PythonExe -m sptool.cli @ArgsList
+& python -m sptool.cli @ArgsList
 exit $LASTEXITCODE

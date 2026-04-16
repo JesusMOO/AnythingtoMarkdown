@@ -18,13 +18,13 @@ dependencies = [
   "psutil",
 ]
 
-[project.scripts]
-sptool = "sptool.cli:main"
-
 [project.optional-dependencies]
 dev = [
   "pytest",
 ]
+
+[tool.setuptools]
+script-files = ["scripts/sptool.cmd", "scripts/sptool.ps1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

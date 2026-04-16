@@ -39,6 +39,8 @@ Handled by `markitdown`:
 pip install -e .
 ```
 
+On Windows, this installs shell wrappers instead of a Python console script so `sptool` resolves correctly in both `cmd` and PowerShell.
+
 This installs `sptool` and its default runtime dependencies:
 
 - `marker-pdf[full]`

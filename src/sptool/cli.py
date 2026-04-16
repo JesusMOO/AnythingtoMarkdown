@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 import shlex
 import subprocess
 import sys
@@ -25,6 +26,10 @@ MAX_CONCURRENT_JOBS = 2
 
 class MarkerInitializationError(RuntimeError):
     pass
+
+
+def _status(kind: str, message: str) -> None:
+    print(f"•{kind} {message}")
 
 
 @dataclass(frozen=True)
@@ -98,10 +103,10 @@ def _collect_jobs(input_path: Path, explicit_output: Path | None, native_args: l
 def _prepare_job(job: Job, native_args: list[str], mode: str) -> PreparedJob | None:
     backend = detect_backend(job.source)
     if mode == "normal" and job.output is not None and should_skip_output(job.output):
-        print(f".skip {job.output} already exists")
+        _status("skip", f"{job.output} already exists")
         return None
     if backend == "marker" and marker_initialization_required():
-        print(".info initializing marker models...")
+        _status("info", "initializing marker models...")
         try:
             ensure_marker_ready()
         except Exception as exc:
@@ -116,13 +121,13 @@ def _prepare_job(job: Job, native_args: list[str], mode: str) -> PreparedJob | N
 
 def _success_marker(job: PreparedJob, mode: str) -> None:
     if mode == "normal" and job.output is not None:
-        print(f".success {job.source} -> {job.output}")
+        _status("success", f"{job.source} -> {job.output}")
     else:
-        print(f".success {job.source}")
+        _status("success", f"{job.source}")
 
 
 def _error_marker(job: PreparedJob, stderr: str) -> None:
-    print(f".error {job.backend} failed for {job.source}")
+    _status("error", f"{job.backend} failed for {job.source}")
     if stderr:
         print(stderr.strip())
 
@@ -162,7 +167,7 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
             result = run_command_streaming(job.command) if direct_file_input else run_command(job.command)
         except FileNotFoundError as exc:
             missing = exc.filename or job.command[0]
-            print(f".error executable not found: {missing}")
+            _status("error", f"executable not found: {missing}")
             return 4
         if result.returncode != 0:
             _error_marker(job, result.stderr)
@@ -213,10 +218,10 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
             try:
                 job = _prepare_job(pending_job, native_args, mode)
             except ValueError as exc:
-                print(f".error {exc}")
+                _status("error", str(exc))
                 return 3
             except MarkerInitializationError as exc:
-                print(f".error marker initialization failed: {exc}")
+                _status("error", f"marker initialization failed: {exc}")
                 return 6
             if job is None:
                 continue
@@ -227,7 +232,7 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
                 if running:
                     missing_executable = missing
                     continue
-                print(f".error executable not found: {missing}")
+                _status("error", f"executable not found: {missing}")
                 return 4
             command, process = _coerce_started_process(started, job.command)
             running.append(ActiveJob(job=job, command=command, process=process))
@@ -242,11 +247,11 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
                 job = _prepare_job(pending_job, native_args, mode)
             except ValueError as exc:
                 deferred_exit_code = 3
-                deferred_error_message = f".error {exc}"
+                deferred_error_message = f"•error {exc}"
                 continue
             except MarkerInitializationError as exc:
                 deferred_exit_code = 6
-                deferred_error_message = f".error marker initialization failed: {exc}"
+                deferred_error_message = f"•error marker initialization failed: {exc}"
                 continue
             if job is None:
                 continue
@@ -263,10 +268,10 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
             time.sleep(POLL_INTERVAL_SECONDS)
 
     if missing_executable is not None:
-        print(f".error executable not found: {missing_executable}")
+        _status("error", f"executable not found: {missing_executable}")
         return 4
     if deferred_error_message is not None:
-        print(deferred_error_message)
+        print(f"•error {deferred_error_message.split(' ', 1)[1]}")
         return deferred_exit_code or 1
     return 5 if failed else 0
 
@@ -281,16 +286,16 @@ def _handle_args(args: list[str]) -> int:
         return 0
 
     if args[:2] == ["ultra", "start"] or args[:2] == ["ultra", "exit"]:
-        print(".error use the shell wrapper for ultra mode control.")
+        _status("error", "use the shell wrapper for ultra mode control.")
         return 2
 
     if not args:
-        print(".error missing input path")
+        _status("error", "missing input path")
         return 2
 
     input_path = Path(args[0])
     if not input_path.exists():
-        print(f".error input not found: {input_path}")
+        _status("error", f"input not found: {input_path}")
         return 2
 
     explicit_output = Path(args[1]) if len(args) >= 2 and not args[1].startswith("-") else None
@@ -299,19 +304,19 @@ def _handle_args(args: list[str]) -> int:
     try:
         jobs = _collect_jobs(input_path, explicit_output, native_args, mode)
     except ValueError as exc:
-        print(f".error {exc}")
+        _status("error", str(exc))
         return 3
     except MarkerInitializationError as exc:
-        print(f".error marker initialization failed: {exc}")
+        _status("error", f"marker initialization failed: {exc}")
         return 6
 
     try:
         return _run_jobs(jobs, native_args, mode, direct_file_input=input_path.is_file())
     except ValueError as exc:
-        print(f".error {exc}")
+        _status("error", str(exc))
         return 3
     except MarkerInitializationError as exc:
-        print(f".error marker initialization failed: {exc}")
+        _status("error", f"marker initialization failed: {exc}")
         return 6
 
 
@@ -329,17 +334,26 @@ def _run_repl() -> int:
         if line == "exit":
             return 0
         if not line.startswith("sptool"):
-            print(".error expected 'sptool ...' or 'exit'")
+            _status("error", "expected 'sptool ...' or 'exit'")
             continue
 
         try:
             parts = shlex.split(line, posix=False)
         except ValueError as exc:
-            print(f".error {exc}")
+            _status("error", str(exc))
             continue
 
         if parts == ["sptool"]:
-            print(".error missing command after 'sptool'")
+            _status("error", "missing command after 'sptool'")
+            continue
+
+        if parts[1:] == ["ultra", "start"]:
+            os.environ["TOOL_MODE"] = "ultra"
+            print("ultra mode enabled")
+            continue
+        if parts[1:] == ["ultra", "exit"]:
+            os.environ.pop("TOOL_MODE", None)
+            print("ultra mode disabled")
             continue
 
         _handle_args(parts[1:])

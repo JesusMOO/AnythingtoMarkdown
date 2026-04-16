@@ -1,7 +1,5 @@
 @echo off
-set "SPTOOL_PYTHON=%~dp0..\ .venv\Scripts\python.exe"
-set "SPTOOL_PYTHON=%SPTOOL_PYTHON: =%"
-if "%~1"=="ultra" (
+if /I "%~1"=="ultra" (
   if /I "%~2"=="start" (
     set "TOOL_MODE=ultra"
     echo ultra mode enabled
@@ -13,4 +11,5 @@ if "%~1"=="ultra" (
     exit /b 0
   )
 )
-"%SPTOOL_PYTHON%" -m sptool.cli %*
+python -m sptool.cli %*
+exit /b %ERRORLEVEL%
