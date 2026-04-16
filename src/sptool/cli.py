@@ -22,6 +22,10 @@ POLL_INTERVAL_SECONDS = 0.5
 _CPU_PERCENT_PRIMED = False
 
 
+class MarkerInitializationError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class ResourceSample:
     cpu: float
@@ -52,9 +56,11 @@ def sample_resources() -> ResourceSample:
         return ResourceSample(cpu=0.0, memory=0.0)
 
     if not _CPU_PERCENT_PRIMED:
-        psutil.cpu_percent(interval=None)
         _CPU_PERCENT_PRIMED = True
-        return ResourceSample(cpu=1.0, memory=psutil.virtual_memory().percent / 100.0)
+        return ResourceSample(
+            cpu=psutil.cpu_percent(interval=0.1) / 100.0,
+            memory=psutil.virtual_memory().percent / 100.0,
+        )
 
     return ResourceSample(
         cpu=psutil.cpu_percent(interval=None) / 100.0,
@@ -87,7 +93,10 @@ def _collect_jobs(input_path: Path, explicit_output: Path | None, native_args: l
             continue
         if backend == "marker" and marker_initialization_required():
             print(".info initializing marker models...")
-            ensure_marker_ready()
+            try:
+                ensure_marker_ready()
+            except Exception as exc:
+                raise MarkerInitializationError(str(exc)) from exc
         command = (
             build_ultra_command(backend, source, native_args)
             if mode == "ultra"
@@ -154,6 +163,7 @@ def _run_jobs(jobs: list[Job], mode: str) -> int:
     pending = list(jobs)
     running: list[ActiveJob] = []
     failed = False
+    missing_executable: str | None = None
 
     while pending or running:
         completed: list[ActiveJob] = []
@@ -173,6 +183,9 @@ def _run_jobs(jobs: list[Job], mode: str) -> int:
         if failed:
             pending.clear()
 
+        if missing_executable is not None:
+            pending.clear()
+
         if completed:
             if running:
                 time.sleep(POLL_INTERVAL_SECONDS)
@@ -184,24 +197,30 @@ def _run_jobs(jobs: list[Job], mode: str) -> int:
                 started = start_command(job.command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             except FileNotFoundError as exc:
                 missing = exc.filename or job.command[0]
+                if running:
+                    missing_executable = missing
+                    continue
                 print(f".error executable not found: {missing}")
                 return 4
             command, process = _coerce_started_process(started, job.command)
             running.append(ActiveJob(job=job, command=command, process=process))
-        elif running and pending and not failed and max_concurrency(sample_resources()) > 0:
+        elif running and pending and not failed and missing_executable is None and max_concurrency(sample_resources()) > 0:
             job = pending.pop(0)
             try:
                 started = start_command(job.command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             except FileNotFoundError as exc:
                 missing = exc.filename or job.command[0]
-                print(f".error executable not found: {missing}")
-                return 4
+                missing_executable = missing
+                continue
             command, process = _coerce_started_process(started, job.command)
             running.append(ActiveJob(job=job, command=command, process=process))
 
         if running:
             time.sleep(POLL_INTERVAL_SECONDS)
 
+    if missing_executable is not None:
+        print(f".error executable not found: {missing_executable}")
+        return 4
     return 5 if failed else 0
 
 
@@ -235,7 +254,7 @@ def _handle_args(args: list[str]) -> int:
     except ValueError as exc:
         print(f".error {exc}")
         return 3
-    except Exception as exc:
+    except MarkerInitializationError as exc:
         print(f".error marker initialization failed: {exc}")
         return 6
 

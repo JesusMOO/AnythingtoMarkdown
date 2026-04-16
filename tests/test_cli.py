@@ -173,7 +173,7 @@ def test_sample_resources_treats_unprimed_cpu_percent_as_busy(monkeypatch):
         @staticmethod
         def cpu_percent(interval=None):
             calls.append(interval)
-            return 0.0 if len(calls) == 1 else 25.0
+            return 25.0
 
         @staticmethod
         def virtual_memory():
@@ -185,9 +185,47 @@ def test_sample_resources_treats_unprimed_cpu_percent_as_busy(monkeypatch):
     first = sample_resources()
     second = sample_resources()
 
-    assert first == ResourceSample(cpu=1.0, memory=0.4)
+    assert first == ResourceSample(cpu=0.25, memory=0.4)
     assert second == ResourceSample(cpu=0.25, memory=0.4)
-    assert calls == [None, None]
+    assert calls == [0.1, None]
+
+
+def test_directory_processing_waits_for_running_jobs_after_launch_failure(monkeypatch, tmp_path, capsys):
+    root = tmp_path / "batch"
+    root.mkdir()
+    (root / "a.pdf").write_text("a", encoding="utf-8")
+    (root / "b.pdf").write_text("b", encoding="utf-8")
+
+    launches = {"count": 0}
+
+    def fake_sample_resources():
+        return SimpleNamespace(cpu=0.05, memory=0.05)
+
+    def fake_start_command(command, **kwargs):
+        launches["count"] += 1
+        if launches["count"] == 1:
+            return FakeProcess(command, polls_to_finish=2)
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
+    monkeypatch.setattr("sptool.cli.sample_resources", fake_sample_resources, raising=False)
+    monkeypatch.setattr("sptool.cli.start_command", fake_start_command, raising=False)
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert main([str(root)]) == 4
+    output = capsys.readouterr().out
+    assert ".success" in output
+    assert ".error executable not found:" in output
+
+
+def test_collect_jobs_routing_error_returns_exit_code_3(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "a.xyz"
+    source.write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr("sptool.cli.detect_backend", lambda path: (_ for _ in ()).throw(ValueError("unsupported extension: .xyz")))
+
+    assert main([str(source)]) == 3
+    assert ".error unsupported extension: .xyz" in capsys.readouterr().out
 
 
 class FakeProcess:
