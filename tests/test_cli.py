@@ -1,4 +1,7 @@
 import runpy
+import time
+from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -124,6 +127,107 @@ def test_pdf_initialization_failure_exits_without_running_backend(monkeypatch, t
     output = capsys.readouterr().out
     assert ".error marker initialization failed: network blocked" in output
     assert seen["run"] is False
+
+
+class FakeProcess:
+    def __init__(self, command, returncode=0, polls_to_finish=0):
+        self.command = command
+        self.returncode = returncode
+        self.stdout = ""
+        self.stderr = ""
+        self._polls_remaining = polls_to_finish
+        self._done = polls_to_finish == 0
+
+    def poll(self):
+        if self._done:
+            return self.returncode
+        if self._polls_remaining > 0:
+            self._polls_remaining -= 1
+        if self._polls_remaining == 0:
+            self._done = True
+            return self.returncode
+        return None
+
+    def wait(self, timeout=None):
+        self._done = True
+        return self.returncode
+
+
+def test_directory_processing_launches_an_additional_job_when_resources_are_low(monkeypatch, tmp_path):
+    root = tmp_path / "batch"
+    root.mkdir()
+    (root / "a.pdf").write_text("a", encoding="utf-8")
+    (root / "b.pdf").write_text("b", encoding="utf-8")
+
+    launched = []
+    active = []
+    overlap_detected = {"value": False}
+
+    def fake_sample_resources():
+        return SimpleNamespace(cpu=0.05, memory=0.05)
+
+    def fake_start_command(command):
+        if any(process.poll() is None for process in active):
+            overlap_detected["value"] = True
+        launched.append(command)
+        process = FakeProcess(command, polls_to_finish=2)
+        active.append(process)
+        return process
+
+    def fake_run_command(command):
+        return FakeProcess(command)
+
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
+    monkeypatch.setattr("sptool.cli.sample_resources", fake_sample_resources, raising=False)
+    monkeypatch.setattr("sptool.cli.start_command", fake_start_command, raising=False)
+    monkeypatch.setattr("sptool.cli.run_command", fake_run_command)
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert main([str(root)]) == 0
+    assert len(launched) == 2
+    assert overlap_detected["value"] is True
+
+
+def test_directory_processing_stops_admitting_new_work_after_failure(monkeypatch, tmp_path):
+    root = tmp_path / "batch"
+    root.mkdir()
+    (root / "a.pdf").write_text("a", encoding="utf-8")
+    (root / "b.pdf").write_text("b", encoding="utf-8")
+    (root / "c.pdf").write_text("c", encoding="utf-8")
+
+    launched = []
+    active = []
+
+    def source_name(command):
+        for part in command:
+            text = str(part)
+            if text.endswith(".pdf"):
+                return Path(text).name
+        return None
+
+    def fake_sample_resources():
+        return SimpleNamespace(cpu=0.05, memory=0.05)
+
+    def fake_start_command(command):
+        launched.append(command)
+        returncode = 1 if source_name(command) == "b.pdf" else 0
+        process = FakeProcess(command, returncode=returncode, polls_to_finish=2)
+        active.append(process)
+        return process
+
+    def fake_run_command(command):
+        return FakeProcess(command)
+
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
+    monkeypatch.setattr("sptool.cli.sample_resources", fake_sample_resources, raising=False)
+    monkeypatch.setattr("sptool.cli.start_command", fake_start_command, raising=False)
+    monkeypatch.setattr("sptool.cli.run_command", fake_run_command)
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert main([str(root)]) == 5
+    launched_sources = [source_name(command) for command in launched]
+    assert "b.pdf" in launched_sources
+    assert "c.pdf" not in launched_sources
 
 
 def test_module_entrypoint_prints_banner_and_version(capsys, monkeypatch):
