@@ -174,6 +174,10 @@ class FakeProcess:
         self._polls_remaining = polls_to_finish
         self._done = polls_to_finish == 0
 
+    def communicate(self):
+        self._done = True
+        return (self.stdout, self.stderr)
+
     def poll(self):
         if self._done:
             return self.returncode
@@ -202,8 +206,13 @@ def test_directory_processing_launches_an_additional_job_when_resources_are_low(
     def fake_sample_resources():
         return SimpleNamespace(cpu=0.05, memory=0.05)
 
-    def fake_start_command(command):
-        if any(process.poll() is None for process in active):
+    def fake_start_command(command, **kwargs):
+        assert kwargs == {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+        }
+        if any(not process._done for process in active):
             overlap_detected["value"] = True
         launched.append(command)
         process = FakeProcess(command, polls_to_finish=2)
@@ -244,7 +253,12 @@ def test_directory_processing_stops_admitting_new_work_after_failure(monkeypatch
     def fake_sample_resources():
         return SimpleNamespace(cpu=0.05, memory=0.05)
 
-    def fake_start_command(command):
+    def fake_start_command(command, **kwargs):
+        assert kwargs == {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+        }
         launched.append(command)
         returncode = 1 if source_name(command) == "b.pdf" else 0
         process = FakeProcess(command, returncode=returncode, polls_to_finish=2)

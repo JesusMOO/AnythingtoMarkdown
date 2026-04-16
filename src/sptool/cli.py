@@ -1,17 +1,200 @@
+from dataclasses import dataclass
 import shlex
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 from sptool import __version__
 from sptool.banner import render_banner
 from sptool.commands import build_normal_command, build_ultra_command
-from sptool.executor import run_command
+from sptool.executor import ExecutionResult, run_command, start_command
 from sptool.helptext import render_help
 from sptool.marker_init import ensure_marker_ready, marker_initialization_required
 from sptool.modes import get_mode
 from sptool.paths import directory_output_path, should_skip_output, single_file_output_path
 from sptool.routing import detect_backend
 from sptool.scanner import iter_files
+
+LOW_WATER_THRESHOLD = 0.60
+HIGH_WATER_THRESHOLD = 0.70
+POLL_INTERVAL_SECONDS = 0.5
+
+
+@dataclass(frozen=True)
+class ResourceSample:
+    cpu: float
+    memory: float
+
+
+@dataclass(frozen=True)
+class Job:
+    source: Path
+    output: Path | None
+    backend: str
+    command: list[str]
+
+
+@dataclass(frozen=True)
+class ActiveJob:
+    job: Job
+    command: list[str]
+    process: subprocess.Popen | object
+
+
+def sample_resources() -> ResourceSample:
+    try:
+        import psutil
+    except ImportError:
+        return ResourceSample(cpu=0.0, memory=0.0)
+
+    return ResourceSample(
+        cpu=psutil.cpu_percent(interval=None) / 100.0,
+        memory=psutil.virtual_memory().percent / 100.0,
+    )
+
+
+def max_concurrency(resources: ResourceSample) -> int:
+    if resources.cpu >= HIGH_WATER_THRESHOLD or resources.memory >= HIGH_WATER_THRESHOLD:
+        return 0
+    if resources.cpu <= LOW_WATER_THRESHOLD and resources.memory <= LOW_WATER_THRESHOLD:
+        return 1
+    return 0
+
+
+def _collect_jobs(input_path: Path, explicit_output: Path | None, native_args: list[str], mode: str) -> list[Job]:
+    jobs: list[tuple[Path, Path | None]] = []
+    if input_path.is_file():
+        output = explicit_output or single_file_output_path(input_path)
+        jobs.append((input_path, output))
+    else:
+        for source in iter_files(input_path):
+            jobs.append((source, directory_output_path(input_path, source)))
+
+    runnable_jobs: list[Job] = []
+    for source, output in jobs:
+        backend = detect_backend(source)
+        if mode == "normal" and output is not None and should_skip_output(output):
+            print(f".skip {output} already exists")
+            continue
+        if backend == "marker" and marker_initialization_required():
+            print(".info initializing marker models...")
+            ensure_marker_ready()
+        command = (
+            build_ultra_command(backend, source, native_args)
+            if mode == "ultra"
+            else build_normal_command(backend, source, output, [])
+        )
+        runnable_jobs.append(Job(source=source, output=output, backend=backend, command=command))
+    return runnable_jobs
+
+
+def _success_marker(job: Job, mode: str) -> None:
+    if mode == "normal" and job.output is not None:
+        print(f".success {job.source} -> {job.output}")
+    else:
+        print(f".success {job.source}")
+
+
+def _error_marker(job: Job, stderr: str) -> None:
+    print(f".error {job.backend} failed for {job.source}")
+    if stderr:
+        print(stderr.strip())
+
+
+def _coerce_started_process(started, command: list[str]) -> tuple[list[str], subprocess.Popen | object]:
+    process = getattr(started, "process", started)
+    actual_command = getattr(started, "command", command)
+    return actual_command, process
+
+
+def _finalize_process(process: subprocess.Popen | object, command: list[str]) -> ExecutionResult:
+    if hasattr(process, "communicate"):
+        stdout, stderr = process.communicate()
+        returncode = process.wait()
+        return ExecutionResult(
+            command=command,
+            returncode=returncode,
+            stdout=stdout or "",
+            stderr=stderr or "",
+        )
+    return ExecutionResult(
+        command=command,
+        returncode=getattr(process, "returncode", 0),
+        stdout=getattr(process, "stdout", "") or "",
+        stderr=getattr(process, "stderr", "") or "",
+    )
+
+
+def _run_jobs(jobs: list[Job], mode: str) -> int:
+    if not jobs:
+        return 0
+    if len(jobs) == 1:
+        job = jobs[0]
+        try:
+            result = run_command(job.command)
+        except FileNotFoundError as exc:
+            missing = exc.filename or job.command[0]
+            print(f".error executable not found: {missing}")
+            return 4
+        if result.returncode != 0:
+            _error_marker(job, result.stderr)
+            return 5
+        _success_marker(job, mode)
+        return 0
+
+    pending = list(jobs)
+    running: list[ActiveJob] = []
+    failed = False
+
+    while pending or running:
+        completed: list[ActiveJob] = []
+        for active in running:
+            if active.process.poll() is not None:
+                completed.append(active)
+
+        for active in completed:
+            running.remove(active)
+            result = _finalize_process(active.process, active.command)
+            if result.returncode != 0:
+                failed = True
+                _error_marker(active.job, result.stderr)
+            else:
+                _success_marker(active.job, mode)
+
+        if failed:
+            pending.clear()
+
+        if completed:
+            if running:
+                time.sleep(POLL_INTERVAL_SECONDS)
+            continue
+
+        if not running and pending and not failed:
+            job = pending.pop(0)
+            try:
+                started = start_command(job.command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            except FileNotFoundError as exc:
+                missing = exc.filename or job.command[0]
+                print(f".error executable not found: {missing}")
+                return 4
+            command, process = _coerce_started_process(started, job.command)
+            running.append(ActiveJob(job=job, command=command, process=process))
+        elif running and pending and not failed and max_concurrency(sample_resources()) > 0:
+            job = pending.pop(0)
+            try:
+                started = start_command(job.command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            except FileNotFoundError as exc:
+                missing = exc.filename or job.command[0]
+                print(f".error executable not found: {missing}")
+                return 4
+            command, process = _coerce_started_process(started, job.command)
+            running.append(ActiveJob(job=job, command=command, process=process))
+
+        if running:
+            time.sleep(POLL_INTERVAL_SECONDS)
+
+    return 5 if failed else 0
 
 
 def _handle_args(args: list[str]) -> int:
@@ -39,53 +222,16 @@ def _handle_args(args: list[str]) -> int:
     explicit_output = Path(args[1]) if len(args) >= 2 and not args[1].startswith("-") else None
     native_args = args[2:] if explicit_output else args[1:]
 
-    jobs = []
-    if input_path.is_file():
-        output = explicit_output or single_file_output_path(input_path)
-        jobs.append((input_path, output))
-    else:
-        for source in iter_files(input_path):
-            output = directory_output_path(input_path, source)
-            jobs.append((source, output))
+    try:
+        jobs = _collect_jobs(input_path, explicit_output, native_args, mode)
+    except ValueError as exc:
+        print(f".error {exc}")
+        return 3
+    except Exception as exc:
+        print(f".error marker initialization failed: {exc}")
+        return 6
 
-    for source, output in jobs:
-        try:
-            backend = detect_backend(source)
-        except ValueError as exc:
-            print(f".error {exc}")
-            return 3
-        if mode == "normal" and should_skip_output(output):
-            print(f".skip {output} already exists")
-            continue
-        if backend == "marker" and marker_initialization_required():
-            print(".info initializing marker models...")
-            try:
-                ensure_marker_ready()
-            except Exception as exc:
-                print(f".error marker initialization failed: {exc}")
-                return 6
-        command = (
-            build_ultra_command(backend, source, native_args)
-            if mode == "ultra"
-            else build_normal_command(backend, source, output, [])
-        )
-        try:
-            result = run_command(command)
-        except FileNotFoundError as exc:
-            missing = exc.filename or command[0]
-            print(f".error executable not found: {missing}")
-            return 4
-        if result.returncode != 0:
-            print(f".error {backend} failed for {source}")
-            if result.stderr:
-                print(result.stderr.strip())
-            return 5
-        if mode == "normal":
-            print(f".success {source} -> {output}")
-        else:
-            print(f".success {source}")
-
-    return 0
+    return _run_jobs(jobs, mode)
 
 
 def _run_repl() -> int:
