@@ -1,5 +1,6 @@
 import runpy
 import subprocess
+import sys
 import time
 from types import SimpleNamespace
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from sptool import __version__
-from sptool.cli import main
+from sptool.cli import ResourceSample, main, sample_resources
 import sptool.executor as executor
 
 
@@ -163,6 +164,30 @@ def test_pdf_initialization_failure_exits_without_running_backend(monkeypatch, t
     output = capsys.readouterr().out
     assert ".error marker initialization failed: network blocked" in output
     assert seen["run"] is False
+
+
+def test_sample_resources_treats_unprimed_cpu_percent_as_busy(monkeypatch):
+    calls = []
+
+    class FakePsutil:
+        @staticmethod
+        def cpu_percent(interval=None):
+            calls.append(interval)
+            return 0.0 if len(calls) == 1 else 25.0
+
+        @staticmethod
+        def virtual_memory():
+            return SimpleNamespace(percent=40.0)
+
+    monkeypatch.setitem(sys.modules, "psutil", FakePsutil)
+    monkeypatch.setattr("sptool.cli._CPU_PERCENT_PRIMED", False, raising=False)
+
+    first = sample_resources()
+    second = sample_resources()
+
+    assert first == ResourceSample(cpu=1.0, memory=0.4)
+    assert second == ResourceSample(cpu=0.25, memory=0.4)
+    assert calls == [None, None]
 
 
 class FakeProcess:

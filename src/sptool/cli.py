@@ -19,6 +19,7 @@ from sptool.scanner import iter_files
 LOW_WATER_THRESHOLD = 0.60
 HIGH_WATER_THRESHOLD = 0.70
 POLL_INTERVAL_SECONDS = 0.5
+_CPU_PERCENT_PRIMED = False
 
 
 @dataclass(frozen=True)
@@ -43,10 +44,17 @@ class ActiveJob:
 
 
 def sample_resources() -> ResourceSample:
+    global _CPU_PERCENT_PRIMED
+
     try:
         import psutil
     except ImportError:
         return ResourceSample(cpu=0.0, memory=0.0)
+
+    if not _CPU_PERCENT_PRIMED:
+        psutil.cpu_percent(interval=None)
+        _CPU_PERCENT_PRIMED = True
+        return ResourceSample(cpu=1.0, memory=psutil.virtual_memory().percent / 100.0)
 
     return ResourceSample(
         cpu=psutil.cpu_percent(interval=None) / 100.0,
