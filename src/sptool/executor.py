@@ -3,6 +3,12 @@ import subprocess
 
 
 @dataclass(frozen=True)
+class StartedProcess:
+    command: list[str]
+    process: subprocess.Popen
+
+
+@dataclass(frozen=True)
 class ExecutionResult:
     command: list[str]
     returncode: int
@@ -10,11 +16,15 @@ class ExecutionResult:
     stderr: str
 
 
+def start_command(command: list[str]) -> StartedProcess:
+    return StartedProcess(command=command, process=subprocess.Popen(command))
+
+
 def run_command(command: list[str]) -> ExecutionResult:
-    completed = subprocess.run(command, capture_output=True, text=True)
+    started = start_command(command)
     return ExecutionResult(
-        command=command,
-        returncode=completed.returncode,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        command=started.command,
+        returncode=started.process.wait(),
+        stdout="",
+        stderr="",
     )

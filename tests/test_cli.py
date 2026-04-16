@@ -7,7 +7,7 @@ import pytest
 
 from sptool import __version__
 from sptool.cli import main
-from sptool.executor import run_command
+import sptool.executor as executor
 
 
 def test_version_string_exists():
@@ -29,14 +29,27 @@ def test_version_flag_returns_success():
 
 
 def test_run_command_returns_success_for_zero_exit(monkeypatch):
-    class Completed:
-        returncode = 0
-        stdout = ""
-        stderr = ""
+    class FakePopen:
+        def __init__(self, command):
+            self.command = command
 
-    monkeypatch.setattr("sptool.executor.subprocess.run", lambda *a, **k: Completed())
-    result = run_command(["markitdown", "a.docx", "-o", "a.md"])
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr("sptool.executor.subprocess.Popen", FakePopen)
+    result = executor.run_command(["markitdown", "a.docx", "-o", "a.md"])
     assert result.returncode == 0
+
+
+def test_start_command_returns_started_process(monkeypatch):
+    class FakePopen:
+        def __init__(self, command):
+            self.command = command
+
+    monkeypatch.setattr("sptool.executor.subprocess.Popen", FakePopen)
+    started = executor.start_command(["markitdown", "a.docx", "-o", "a.md"])
+    assert started.command == ["markitdown", "a.docx", "-o", "a.md"]
+    assert started.process.command == ["markitdown", "a.docx", "-o", "a.md"]
 
 
 def test_single_file_path_calls_backend(monkeypatch, tmp_path, capsys):
