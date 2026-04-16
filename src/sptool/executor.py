@@ -16,15 +16,16 @@ class ExecutionResult:
     stderr: str
 
 
-def start_command(command: list[str]) -> StartedProcess:
-    return StartedProcess(command=command, process=subprocess.Popen(command))
+def start_command(command: list[str], **popen_kwargs) -> StartedProcess:
+    return StartedProcess(command=command, process=subprocess.Popen(command, **popen_kwargs))
 
 
 def run_command(command: list[str]) -> ExecutionResult:
-    started = start_command(command)
+    started = start_command(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stdout, stderr = started.process.communicate()
     return ExecutionResult(
         command=started.command,
         returncode=started.process.wait(),
-        stdout="",
-        stderr="",
+        stdout=stdout,
+        stderr=stderr,
     )

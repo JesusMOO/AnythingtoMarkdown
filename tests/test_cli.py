@@ -1,4 +1,5 @@
 import runpy
+import subprocess
 import time
 from types import SimpleNamespace
 from pathlib import Path
@@ -30,8 +31,13 @@ def test_version_flag_returns_success():
 
 def test_run_command_returns_success_for_zero_exit(monkeypatch):
     class FakePopen:
-        def __init__(self, command):
+        def __init__(self, command, **kwargs):
             self.command = command
+            self.kwargs = kwargs
+            self.returncode = 0
+
+        def communicate(self):
+            return ("converted", "")
 
         def wait(self):
             return 0
@@ -39,6 +45,23 @@ def test_run_command_returns_success_for_zero_exit(monkeypatch):
     monkeypatch.setattr("sptool.executor.subprocess.Popen", FakePopen)
     result = executor.run_command(["markitdown", "a.docx", "-o", "a.md"])
     assert result.returncode == 0
+    assert result.stdout == "converted"
+    assert result.stderr == ""
+
+
+def test_start_command_forwards_popen_kwargs(monkeypatch):
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, command, **kwargs):
+            seen["command"] = command
+            seen["kwargs"] = kwargs
+
+    monkeypatch.setattr("sptool.executor.subprocess.Popen", FakePopen)
+    started = executor.start_command(["markitdown"], stdout=subprocess.PIPE, text=True)
+    assert started.command == ["markitdown"]
+    assert seen["command"] == ["markitdown"]
+    assert seen["kwargs"] == {"stdout": subprocess.PIPE, "text": True}
 
 
 def test_start_command_returns_started_process(monkeypatch):
