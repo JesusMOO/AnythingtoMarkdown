@@ -14,6 +14,7 @@ The goal is simple: keep the command surface small, keep the workflow predictabl
 - One command for multiple input formats
 - Automatic backend selection by file extension
 - Works with single files and folders
+- Batch and folder conversions run concurrently by default
 - Normal mode keeps common conversions simple
 - Ultra mode stays compatible with native backend arguments after the input path
 
@@ -53,6 +54,12 @@ sptool --help
 ```
 
 In normal mode, `sptool` writes Markdown output automatically and skips files whose target `.md` already exists.
+
+## Adaptive concurrency
+
+When `sptool` processes multiple files, it starts work concurrently and keeps admitting new jobs while CPU and memory stay under the low-water threshold. If either resource rises above the high-water threshold, it stops starting new work until usage drops again.
+
+Because multiple conversions can run at once, backend logs may interleave on stdout and stderr.
 
 ## Normal mode
 
