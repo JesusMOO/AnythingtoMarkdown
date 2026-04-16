@@ -29,3 +29,13 @@ def run_command(command: list[str]) -> ExecutionResult:
         stdout=stdout,
         stderr=stderr,
     )
+
+
+def run_command_streaming(command: list[str]) -> ExecutionResult:
+    started = start_command(command)
+    return ExecutionResult(
+        command=started.command,
+        returncode=started.process.wait(),
+        stdout="",
+        stderr="",
+    )

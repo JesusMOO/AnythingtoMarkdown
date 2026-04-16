@@ -91,7 +91,33 @@ def test_single_file_path_calls_backend(monkeypatch, tmp_path, capsys):
         return Result()
 
     monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
-    monkeypatch.setattr("sptool.cli.run_command", fake_run)
+    monkeypatch.setattr("sptool.cli.run_command_streaming", fake_run)
+    assert main([str(source)]) == 0
+    assert seen["command"][0] == "marker_single"
+    assert ".success" in capsys.readouterr().out
+
+
+def test_single_file_path_uses_streaming_backend(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "a.pdf"
+    source.write_text("x", encoding="utf-8")
+    seen = {}
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_streaming_run(command):
+        seen["command"] = command
+        return Result()
+
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
+    monkeypatch.setattr("sptool.cli.run_command_streaming", fake_streaming_run, raising=False)
+    monkeypatch.setattr(
+        "sptool.cli.run_command",
+        lambda command: (_ for _ in ()).throw(AssertionError("captured path should not be used")),
+    )
+
     assert main([str(source)]) == 0
     assert seen["command"][0] == "marker_single"
     assert ".success" in capsys.readouterr().out
@@ -131,7 +157,7 @@ def test_pdf_path_initializes_marker_before_running_backend(monkeypatch, tmp_pat
 
     monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: True)
     monkeypatch.setattr("sptool.cli.ensure_marker_ready", fake_init, raising=False)
-    monkeypatch.setattr("sptool.cli.run_command", fake_run)
+    monkeypatch.setattr("sptool.cli.run_command_streaming", fake_run)
 
     assert main([str(source)]) == 0
 
@@ -159,7 +185,7 @@ def test_pdf_initialization_failure_exits_without_running_backend(monkeypatch, t
 
     monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: True)
     monkeypatch.setattr("sptool.cli.ensure_marker_ready", fake_init, raising=False)
-    monkeypatch.setattr("sptool.cli.run_command", fake_run)
+    monkeypatch.setattr("sptool.cli.run_command_streaming", fake_run)
 
     assert main([str(source)]) == 6
 
@@ -218,6 +244,37 @@ def test_directory_processing_waits_for_running_jobs_after_launch_failure(monkey
     output = capsys.readouterr().out
     assert ".success" in output
     assert ".error executable not found:" in output
+
+
+def test_directory_path_keeps_captured_batch_execution(monkeypatch, tmp_path):
+    root = tmp_path / "batch"
+    root.mkdir()
+    (root / "a.pdf").write_text("a", encoding="utf-8")
+    seen = {}
+
+    def fake_sample_resources():
+        return SimpleNamespace(cpu=0.05, memory=0.05)
+
+    def fake_start_command(command, **kwargs):
+        return (_ for _ in ()).throw(AssertionError("batch start_command path should not be used for directory single-job fallback"))
+
+    def fake_run_command(command):
+        seen["command"] = command
+        return FakeProcess(command)
+
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
+    monkeypatch.setattr("sptool.cli.sample_resources", fake_sample_resources, raising=False)
+    monkeypatch.setattr("sptool.cli.start_command", fake_start_command, raising=False)
+    monkeypatch.setattr("sptool.cli.run_command", fake_run_command)
+    monkeypatch.setattr(
+        "sptool.cli.run_command_streaming",
+        lambda command: (_ for _ in ()).throw(AssertionError("streaming path should not be used")),
+        raising=False,
+    )
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert main([str(root)]) == 0
+    assert seen["command"][0] == "marker_single"
 
 
 def test_collect_jobs_routing_error_returns_exit_code_3(monkeypatch, tmp_path, capsys):

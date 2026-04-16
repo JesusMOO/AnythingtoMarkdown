@@ -8,7 +8,7 @@ from pathlib import Path
 from sptool import __version__
 from sptool.banner import render_banner
 from sptool.commands import build_normal_command, build_ultra_command
-from sptool.executor import ExecutionResult, run_command, start_command
+from sptool.executor import ExecutionResult, run_command, run_command_streaming, start_command
 from sptool.helptext import render_help
 from sptool.marker_init import ensure_marker_ready, marker_initialization_required
 from sptool.modes import get_mode
@@ -151,7 +151,7 @@ def _finalize_process(process: subprocess.Popen | object, command: list[str]) ->
     )
 
 
-def _run_jobs(jobs: list[Job], native_args: list[str], mode: str) -> int:
+def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_input: bool = False) -> int:
     if not jobs:
         return 0
     if len(jobs) == 1:
@@ -159,7 +159,7 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str) -> int:
         if job is None:
             return 0
         try:
-            result = run_command(job.command)
+            result = run_command_streaming(job.command) if direct_file_input else run_command(job.command)
         except FileNotFoundError as exc:
             missing = exc.filename or job.command[0]
             print(f".error executable not found: {missing}")
@@ -306,7 +306,7 @@ def _handle_args(args: list[str]) -> int:
         return 6
 
     try:
-        return _run_jobs(jobs, native_args, mode)
+        return _run_jobs(jobs, native_args, mode, direct_file_input=input_path.is_file())
     except ValueError as exc:
         print(f".error {exc}")
         return 3
