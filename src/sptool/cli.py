@@ -188,6 +188,8 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str) -> int:
             result = _finalize_process(active.process, active.command)
             if result.returncode != 0:
                 failed = True
+                deferred_exit_code = None
+                deferred_error_message = None
                 _error_marker(active.job, result.stderr)
             else:
                 _success_marker(active.job, mode)

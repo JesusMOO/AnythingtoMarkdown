@@ -456,6 +456,39 @@ def test_directory_processing_stops_admitting_new_work_after_failure(monkeypatch
     assert "c.pdf" not in launched_sources
 
 
+def test_running_backend_failure_takes_precedence_over_deferred_routing_error(monkeypatch, tmp_path, capsys):
+    root = tmp_path / "batch"
+    root.mkdir()
+    first = root / "a.pdf"
+    later = root / "b.xyz"
+    first.write_text("a", encoding="utf-8")
+    later.write_text("b", encoding="utf-8")
+
+    def fake_detect_backend(path):
+        if path == first:
+            return "marker"
+        raise ValueError("unsupported extension: .xyz")
+
+    def fake_sample_resources():
+        return SimpleNamespace(cpu=0.05, memory=0.05)
+
+    def fake_start_command(command, **kwargs):
+        return FakeProcess(command, returncode=1, polls_to_finish=2)
+
+    monkeypatch.setattr("sptool.cli.iter_files", lambda path: [first, later])
+    monkeypatch.setattr("sptool.cli.detect_backend", fake_detect_backend)
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
+    monkeypatch.setattr("sptool.cli.sample_resources", fake_sample_resources, raising=False)
+    monkeypatch.setattr("sptool.cli.start_command", fake_start_command, raising=False)
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert main([str(root)]) == 5
+
+    output = capsys.readouterr().out
+    assert ".error marker failed for" in output
+    assert ".error unsupported extension: .xyz" not in output
+
+
 def test_module_entrypoint_prints_banner_and_version(capsys, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda prompt: "exit")
     monkeypatch.setattr("sys.argv", ["sptool"])
