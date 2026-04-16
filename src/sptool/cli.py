@@ -20,6 +20,7 @@ LOW_WATER_THRESHOLD = 0.60
 HIGH_WATER_THRESHOLD = 0.70
 POLL_INTERVAL_SECONDS = 0.5
 _CPU_PERCENT_PRIMED = False
+MAX_CONCURRENT_JOBS = 2
 
 
 class MarkerInitializationError(RuntimeError):
@@ -72,7 +73,7 @@ def max_concurrency(resources: ResourceSample) -> int:
     if resources.cpu >= HIGH_WATER_THRESHOLD or resources.memory >= HIGH_WATER_THRESHOLD:
         return 0
     if resources.cpu <= LOW_WATER_THRESHOLD and resources.memory <= LOW_WATER_THRESHOLD:
-        return 1
+        return MAX_CONCURRENT_JOBS
     return 0
 
 
@@ -204,7 +205,12 @@ def _run_jobs(jobs: list[Job], mode: str) -> int:
                 return 4
             command, process = _coerce_started_process(started, job.command)
             running.append(ActiveJob(job=job, command=command, process=process))
-        elif running and pending and not failed and missing_executable is None and max_concurrency(sample_resources()) > 0:
+        elif running and pending and not failed and missing_executable is None:
+            concurrency_limit = max_concurrency(sample_resources())
+            if len(running) >= concurrency_limit:
+                if running:
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                continue
             job = pending.pop(0)
             try:
                 started = start_command(job.command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

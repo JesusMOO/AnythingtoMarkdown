@@ -296,6 +296,41 @@ def test_directory_processing_launches_an_additional_job_when_resources_are_low(
     assert overlap_detected["value"] is True
 
 
+def test_directory_processing_enforces_adaptive_concurrency_ceiling(monkeypatch, tmp_path):
+    root = tmp_path / "batch"
+    root.mkdir()
+    for name in ("a.pdf", "b.pdf", "c.pdf"):
+        (root / name).write_text(name, encoding="utf-8")
+
+    launched = []
+    active = []
+    running_counts = []
+
+    def fake_sample_resources():
+        return SimpleNamespace(cpu=0.05, memory=0.05)
+
+    def fake_start_command(command, **kwargs):
+        assert kwargs == {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+        }
+        running_counts.append(sum(not process._done for process in active))
+        launched.append(command)
+        process = FakeProcess(command, polls_to_finish=3)
+        active.append(process)
+        return process
+
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
+    monkeypatch.setattr("sptool.cli.sample_resources", fake_sample_resources, raising=False)
+    monkeypatch.setattr("sptool.cli.start_command", fake_start_command, raising=False)
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert main([str(root)]) == 0
+    assert len(launched) == 3
+    assert max(running_counts) == 1
+
+
 def test_directory_processing_stops_admitting_new_work_after_failure(monkeypatch, tmp_path):
     root = tmp_path / "batch"
     root.mkdir()
