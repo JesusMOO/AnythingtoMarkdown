@@ -129,6 +129,7 @@ def test_pdf_path_initializes_marker_before_running_backend(monkeypatch, tmp_pat
         events.append(command[0])
         return Result()
 
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: True)
     monkeypatch.setattr("sptool.cli.ensure_marker_ready", fake_init, raising=False)
     monkeypatch.setattr("sptool.cli.run_command", fake_run)
 
@@ -156,6 +157,7 @@ def test_pdf_initialization_failure_exits_without_running_backend(monkeypatch, t
         seen["run"] = True
         return Result()
 
+    monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: True)
     monkeypatch.setattr("sptool.cli.ensure_marker_ready", fake_init, raising=False)
     monkeypatch.setattr("sptool.cli.run_command", fake_run)
 
