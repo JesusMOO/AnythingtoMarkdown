@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import os
 import shlex
 import subprocess
 import sys
@@ -8,11 +7,10 @@ from pathlib import Path
 
 from sptool import __version__
 from sptool.banner import render_banner
-from sptool.commands import build_normal_command, build_ultra_command
+from sptool.commands import build_normal_command
 from sptool.executor import ExecutionResult, run_command, run_command_streaming, start_command
 from sptool.helptext import render_help
 from sptool.marker_init import ensure_marker_ready, marker_initialization_required
-from sptool.modes import get_mode
 from sptool.paths import directory_output_path, should_skip_output, single_file_output_path
 from sptool.routing import detect_backend
 from sptool.scanner import iter_files
@@ -29,7 +27,7 @@ class MarkerInitializationError(RuntimeError):
 
 
 def _status(kind: str, message: str) -> None:
-    print(f"•{kind} {message}")
+    print(f"[{kind}] {message}")
 
 
 @dataclass(frozen=True)
@@ -88,7 +86,7 @@ def max_concurrency(resources: ResourceSample) -> int:
     return 0
 
 
-def _collect_jobs(input_path: Path, explicit_output: Path | None, native_args: list[str], mode: str) -> list[Job]:
+def _collect_jobs(input_path: Path, explicit_output: Path | None, native_args: list[str]) -> list[Job]:
     jobs: list[tuple[Path, Path | None]] = []
     if input_path.is_file():
         output = explicit_output or single_file_output_path(input_path)
@@ -100,9 +98,9 @@ def _collect_jobs(input_path: Path, explicit_output: Path | None, native_args: l
     return [Job(source=source, output=output) for source, output in jobs]
 
 
-def _prepare_job(job: Job, native_args: list[str], mode: str) -> PreparedJob | None:
+def _prepare_job(job: Job, native_args: list[str]) -> PreparedJob | None:
     backend = detect_backend(job.source)
-    if mode == "normal" and job.output is not None and should_skip_output(job.output):
+    if job.output is not None and should_skip_output(job.output):
         _status("skip", f"{job.output} already exists")
         return None
     if backend == "marker" and marker_initialization_required():
@@ -111,16 +109,12 @@ def _prepare_job(job: Job, native_args: list[str], mode: str) -> PreparedJob | N
             ensure_marker_ready()
         except Exception as exc:
             raise MarkerInitializationError(str(exc)) from exc
-    command = (
-        build_ultra_command(backend, job.source, native_args)
-        if mode == "ultra"
-        else build_normal_command(backend, job.source, job.output, [])
-    )
+    command = build_normal_command(backend, job.source, job.output, native_args)
     return PreparedJob(source=job.source, output=job.output, backend=backend, command=command)
 
 
-def _success_marker(job: PreparedJob, mode: str) -> None:
-    if mode == "normal" and job.output is not None:
+def _success_marker(job: PreparedJob) -> None:
+    if job.output is not None:
         _status("success", f"{job.source} -> {job.output}")
     else:
         _status("success", f"{job.source}")
@@ -156,11 +150,11 @@ def _finalize_process(process: subprocess.Popen | object, command: list[str]) ->
     )
 
 
-def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_input: bool = False) -> int:
+def _run_jobs(jobs: list[Job], native_args: list[str], direct_file_input: bool = False) -> int:
     if not jobs:
         return 0
     if len(jobs) == 1:
-        job = _prepare_job(jobs[0], native_args, mode)
+        job = _prepare_job(jobs[0], native_args)
         if job is None:
             return 0
         try:
@@ -172,7 +166,7 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
         if result.returncode != 0:
             _error_marker(job, result.stderr)
             return 5
-        _success_marker(job, mode)
+        _success_marker(job)
         return 0
 
     pending = list(jobs)
@@ -197,7 +191,7 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
                 deferred_error_message = None
                 _error_marker(active.job, result.stderr)
             else:
-                _success_marker(active.job, mode)
+                _success_marker(active.job)
 
         if failed:
             pending.clear()
@@ -216,7 +210,7 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
         if not running and pending and not failed:
             pending_job = pending.pop(0)
             try:
-                job = _prepare_job(pending_job, native_args, mode)
+                job = _prepare_job(pending_job, native_args)
             except ValueError as exc:
                 _status("error", str(exc))
                 return 3
@@ -244,14 +238,14 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
                 continue
             pending_job = pending.pop(0)
             try:
-                job = _prepare_job(pending_job, native_args, mode)
+                job = _prepare_job(pending_job, native_args)
             except ValueError as exc:
                 deferred_exit_code = 3
-                deferred_error_message = f"•error {exc}"
+                deferred_error_message = str(exc)
                 continue
             except MarkerInitializationError as exc:
                 deferred_exit_code = 6
-                deferred_error_message = f"•error marker initialization failed: {exc}"
+                deferred_error_message = f"marker initialization failed: {exc}"
                 continue
             if job is None:
                 continue
@@ -271,23 +265,18 @@ def _run_jobs(jobs: list[Job], native_args: list[str], mode: str, direct_file_in
         _status("error", f"executable not found: {missing_executable}")
         return 4
     if deferred_error_message is not None:
-        print(f"•error {deferred_error_message.split(' ', 1)[1]}")
+        _status("error", deferred_error_message)
         return deferred_exit_code or 1
     return 5 if failed else 0
 
 
 def _handle_args(args: list[str]) -> int:
-    mode = get_mode()
     if args == ["--help"]:
-        print(render_help(mode))
+        print(render_help())
         return 0
     if args == ["--version"]:
         print(__version__)
         return 0
-
-    if args[:2] == ["ultra", "start"] or args[:2] == ["ultra", "exit"]:
-        _status("error", "use the shell wrapper for ultra mode control.")
-        return 2
 
     if not args:
         _status("error", "missing input path")
@@ -302,7 +291,7 @@ def _handle_args(args: list[str]) -> int:
     native_args = args[2:] if explicit_output else args[1:]
 
     try:
-        jobs = _collect_jobs(input_path, explicit_output, native_args, mode)
+        jobs = _collect_jobs(input_path, explicit_output, native_args)
     except ValueError as exc:
         _status("error", str(exc))
         return 3
@@ -311,7 +300,7 @@ def _handle_args(args: list[str]) -> int:
         return 6
 
     try:
-        return _run_jobs(jobs, native_args, mode, direct_file_input=input_path.is_file())
+        return _run_jobs(jobs, native_args, direct_file_input=input_path.is_file())
     except ValueError as exc:
         _status("error", str(exc))
         return 3
@@ -345,15 +334,6 @@ def _run_repl() -> int:
 
         if parts == ["sptool"]:
             _status("error", "missing command after 'sptool'")
-            continue
-
-        if parts[1:] == ["ultra", "start"]:
-            os.environ["TOOL_MODE"] = "ultra"
-            print("ultra mode enabled")
-            continue
-        if parts[1:] == ["ultra", "exit"]:
-            os.environ.pop("TOOL_MODE", None)
-            print("ultra mode disabled")
             continue
 
         _handle_args(parts[1:])

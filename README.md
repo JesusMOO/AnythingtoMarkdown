@@ -15,8 +15,7 @@ The goal is simple: keep the command surface small, keep the workflow predictabl
 - Automatic backend selection by file extension
 - Works with single files and folders
 - Batch and folder conversions run concurrently by default
-- Normal mode keeps common conversions simple
-- Ultra mode stays compatible with native backend arguments after the input path
+- Native backend arguments can be appended directly after the input path
 
 ## Supported formats
 
@@ -55,7 +54,7 @@ sptool folder
 sptool --help
 ```
 
-In normal mode, `sptool` writes Markdown output automatically and skips files whose target `.md` already exists.
+`sptool` writes Markdown output automatically and skips files whose target `.md` already exists.
 
 ## Adaptive concurrency
 
@@ -63,30 +62,18 @@ When `sptool` processes multiple files, it starts work concurrently and keeps ad
 
 Because multiple conversions can run at once, backend logs may interleave on stdout and stderr.
 
-## Normal mode
-
-Use normal mode when you want the simplest wrapper behavior.
+## CLI
 
 ```text
 sptool
 sptool --help
 sptool --version
 sptool file.pdf
-sptool folder
-sptool folder out
-```
-
-## Ultra mode
-
-Use ultra mode when you want to keep `sptool` as the entrypoint but pass native backend arguments through directly.
-
-`ultra` is intended for advanced usage and compatibility with the original `marker` / `markitdown` flags, so you can keep using native options without leaving the `sptool` workflow.
-
-```text
-sptool ultra start
+sptool file.pdf out
 sptool report.pdf --output_dir out --output_format markdown
 sptool notes.docx -o notes.md
-sptool ultra exit
+sptool folder
+sptool folder out
 ```
 
 ## License

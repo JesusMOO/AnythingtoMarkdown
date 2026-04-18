@@ -42,6 +42,7 @@ sptool file.pdf out --max-pages 10
 sptool notes.docx
 sptool notes.docx out.md
 sptool notes.docx -o out.md
+sptool notes.docx --some-flag
 sptool notes.docx out.md --some-flag
 sptool a.csv out
 sptool a.html out
@@ -74,15 +75,21 @@ The parsing rules are:
 4. Native backend arguments may use either short or long flag syntax, for example `-o` or `--max-pages`.
 5. This grammar applies uniformly to all supported single-file types, not just PDF or DOCX.
 
+The meaning of explicit `output` remains backend-specific:
+
+- For `markitdown`-routed files such as `.docx`, `.csv`, and `.html`, `output` may be a target Markdown filename.
+- For `marker`-routed `.pdf` files, `output` is treated as an output directory, not a target filename.
+
 Examples:
 
 ```text
 sptool report.pdf
-sptool report.pdf out
+sptool report.pdf out_dir
 sptool report.pdf --max-pages 10
-sptool report.pdf out --max-pages 10
+sptool report.pdf out_dir --max-pages 10
 sptool notes.docx out.md
 sptool notes.docx -o out.md
+sptool notes.docx --some-flag
 sptool data.csv out
 ```
 
@@ -93,6 +100,8 @@ sptool data.csv out
 - Backend selection still depends on file extension.
 - Simplified default behavior remains active.
 - User-supplied native arguments are appended to the backend command without requiring a mode switch.
+- For `markitdown` inputs, both `sptool input output` and `sptool input -o out.md` remain supported.
+- For `.pdf` inputs, positional `output` continues to mean output directory.
 
 ### Directory inputs
 
@@ -124,6 +133,8 @@ The following stay intact:
 
 - `sptool input`
 - `sptool input output`
+- `sptool input -o out.md` for `markitdown`-routed files
+- `sptool input out_dir` for `.pdf` files where `out_dir` is an output directory
 - `sptool --help`
 - `sptool --version`
 - `exit` in REPL
@@ -176,10 +187,11 @@ The implementation must verify all of the following:
 
 1. Simplified commands still work for supported file types.
 2. Single-file commands still accept explicit `output`.
-3. Native flags work without `ultra`.
-4. `ultra` commands are no longer special-cased.
-5. Wrapper scripts only forward to the Python CLI.
-6. Help and README no longer describe multiple modes.
+3. `markitdown` inputs still support native `-o out.md`.
+4. Native flags work without `ultra`.
+5. `ultra` commands are no longer special-cased.
+6. Wrapper scripts only forward to the Python CLI.
+7. Help and README no longer describe multiple modes.
 
 Representative scenarios:
 
@@ -190,6 +202,7 @@ sptool file.pdf --max-pages 10
 sptool file.pdf out --max-pages 10
 sptool notes.docx out.md
 sptool notes.docx -o out.md
+sptool notes.docx --some-flag
 sptool a.csv out
 sptool folder
 sptool folder out

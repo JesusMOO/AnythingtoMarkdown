@@ -30,6 +30,21 @@ def test_version_flag_returns_success():
     assert main(["--version"]) == 0
 
 
+def test_help_output_has_no_ultra_mode_text(capsys):
+    assert main(["--help"]) == 0
+    output = capsys.readouterr().out
+    assert "sptool ultra start" not in output
+    assert "sptool ultra exit" not in output
+    assert "Current mode: ultra" not in output
+
+
+def test_direct_cli_no_longer_special_cases_ultra_commands(capsys):
+    assert main(["ultra", "start"]) == 2
+    output = capsys.readouterr().out
+    assert "input not found: ultra" in output
+    assert "ultra mode enabled" not in output
+
+
 def test_run_command_returns_success_for_zero_exit(monkeypatch):
     class FakePopen:
         def __init__(self, command, **kwargs):
@@ -94,7 +109,7 @@ def test_single_file_path_calls_backend(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("sptool.cli.run_command_streaming", fake_run)
     assert main([str(source)]) == 0
     assert seen["command"][0] == "marker_single"
-    assert "•success" in capsys.readouterr().out
+    assert "[success]" in capsys.readouterr().out
 
 
 def test_single_file_path_uses_streaming_backend(monkeypatch, tmp_path, capsys):
@@ -120,7 +135,7 @@ def test_single_file_path_uses_streaming_backend(monkeypatch, tmp_path, capsys):
 
     assert main([str(source)]) == 0
     assert seen["command"][0] == "marker_single"
-    assert "•success" in capsys.readouterr().out
+    assert "[success]" in capsys.readouterr().out
 
 
 def test_single_file_failure_prints_error(monkeypatch, tmp_path, capsys):
@@ -135,7 +150,7 @@ def test_single_file_failure_prints_error(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("sptool.cli.marker_initialization_required", lambda: False)
     monkeypatch.setattr("sptool.cli.run_command", lambda command: Result())
     assert main([str(source)]) == 5
-    assert "•error" in capsys.readouterr().out
+    assert "[error]" in capsys.readouterr().out
 
 
 def test_pdf_path_initializes_marker_before_running_backend(monkeypatch, tmp_path, capsys):
@@ -162,7 +177,7 @@ def test_pdf_path_initializes_marker_before_running_backend(monkeypatch, tmp_pat
     assert main([str(source)]) == 0
 
     output = capsys.readouterr().out
-    assert "•info initializing marker models..." in output
+    assert "[info] initializing marker models..." in output
     assert events == ["init", "marker_single"]
 
 
@@ -190,7 +205,7 @@ def test_pdf_initialization_failure_exits_without_running_backend(monkeypatch, t
     assert main([str(source)]) == 6
 
     output = capsys.readouterr().out
-    assert "•error marker initialization failed: network blocked" in output
+    assert "[error] marker initialization failed: network blocked" in output
     assert seen["run"] is False
 
 
@@ -242,8 +257,8 @@ def test_directory_processing_waits_for_running_jobs_after_launch_failure(monkey
 
     assert main([str(root)]) == 4
     output = capsys.readouterr().out
-    assert "•success" in output
-    assert "•error executable not found:" in output
+    assert "[success]" in output
+    assert "[error] executable not found:" in output
 
 
 def test_directory_path_keeps_captured_batch_execution(monkeypatch, tmp_path):
@@ -284,7 +299,7 @@ def test_collect_jobs_routing_error_returns_exit_code_3(monkeypatch, tmp_path, c
     monkeypatch.setattr("sptool.cli.detect_backend", lambda path: (_ for _ in ()).throw(ValueError("unsupported extension: .xyz")))
 
     assert main([str(source)]) == 3
-    assert "•error unsupported extension: .xyz" in capsys.readouterr().out
+    assert "[error] unsupported extension: .xyz" in capsys.readouterr().out
 
 
 def test_directory_processing_completes_earlier_file_before_late_routing_failure(monkeypatch, tmp_path, capsys):
@@ -320,8 +335,8 @@ def test_directory_processing_completes_earlier_file_before_late_routing_failure
 
     output = capsys.readouterr().out
     assert len(launched) == 1
-    assert "•success" in output
-    assert "•error unsupported extension: .xyz" in output
+    assert "[success]" in output
+    assert "[error] unsupported extension: .xyz" in output
 
 
 def test_directory_processing_completes_earlier_file_before_late_marker_init_failure(monkeypatch, tmp_path, capsys):
@@ -359,8 +374,8 @@ def test_directory_processing_completes_earlier_file_before_late_marker_init_fai
 
     output = capsys.readouterr().out
     assert len(launched) == 1
-    assert "•success" in output
-    assert "•error marker initialization failed: network blocked" in output
+    assert "[success]" in output
+    assert "[error] marker initialization failed: network blocked" in output
 
 
 class FakeProcess:
@@ -542,8 +557,8 @@ def test_running_backend_failure_takes_precedence_over_deferred_routing_error(mo
     assert main([str(root)]) == 5
 
     output = capsys.readouterr().out
-    assert "•error marker failed for" in output
-    assert "•error unsupported extension: .xyz" not in output
+    assert "[error] marker failed for" in output
+    assert "[error] unsupported extension: .xyz" not in output
 
 
 def test_module_entrypoint_prints_banner_and_version(capsys, monkeypatch):
@@ -557,14 +572,13 @@ def test_module_entrypoint_prints_banner_and_version(capsys, monkeypatch):
     assert "sptool v0.1.0" in output
 
 
-def test_repl_handles_ultra_mode_commands(monkeypatch, capsys):
-    lines = iter(["sptool ultra start", "sptool ultra exit", "exit"])
+def test_repl_no_longer_special_cases_ultra_mode_commands(monkeypatch, capsys):
+    lines = iter(["sptool ultra start", "exit"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(lines))
-    monkeypatch.delenv("TOOL_MODE", raising=False)
-
     assert main([]) == 0
 
     output = capsys.readouterr().out
-    assert "ultra mode enabled" in output
-    assert "ultra mode disabled" in output
+    assert "input not found: ultra" in output
+    assert "ultra mode enabled" not in output
+    assert "use the shell wrapper for ultra mode control." not in output
     assert "•error use the shell wrapper for ultra mode control." not in output
